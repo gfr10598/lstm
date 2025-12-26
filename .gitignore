@@ -130,8 +130,8 @@ runs/
 *.pt
 *.ckpt
 
-# Data files
-data/
+# Data files (but not code in lstm_classifier/data/)
+/data/
 *.h5
 *.hdf5
 *.npy
