@@ -277,3 +277,166 @@ class VariationalAutoencoderLoss(nn.Module):
             "reconstruction_loss": recon_loss,
             "kl_loss": kl_loss,
         }
+
+
+class EventSpecificLoss(nn.Module):
+    """
+    Loss function for event-specific classifier.
+    
+    Combines multiple loss components:
+    1. Event classification loss (BCE)
+    2. Timing prediction loss (NLL)
+    3. Template alignment loss (MSE with Gaussian targets)
+    4. Optional refractory period loss
+    
+    Args:
+        event_weight: Weight for event classification loss (default: 1.0)
+        timing_weight: Weight for timing prediction loss (default: 1.0)
+        template_weight: Weight for template alignment loss (default: 0.5)
+        refractory_weight: Weight for refractory period loss (default: 0.1)
+    """
+    
+    def __init__(
+        self,
+        event_weight: float = 1.0,
+        timing_weight: float = 1.0,
+        template_weight: float = 0.5,
+        refractory_weight: float = 0.1,
+    ):
+        super(EventSpecificLoss, self).__init__()
+        
+        self.event_weight = event_weight
+        self.timing_weight = timing_weight
+        self.template_weight = template_weight
+        self.refractory_weight = refractory_weight
+        
+        self.bce_loss = nn.BCEWithLogitsLoss()
+    
+    def forward(
+        self,
+        event_logits: torch.Tensor,
+        timing_logits: torch.Tensor,
+        template_scores: torch.Tensor,
+        event_labels: torch.Tensor,
+        event_timings: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Compute combined loss.
+        
+        Args:
+            event_logits: Event classification logits (batch, num_events)
+            timing_logits: Timing prediction logits (batch, seq_len, num_events)
+            template_scores: Template match scores (batch, seq_len, num_events)
+            event_labels: Ground truth event labels (batch, num_events)
+            event_timings: Ground truth event timings in samples (batch, num_events)
+            
+        Returns:
+            Dictionary with keys 'total', 'event', 'timing', 'template'
+        """
+        # 1. Event classification loss
+        event_loss = self.bce_loss(event_logits, event_labels)
+        
+        # 2. Timing prediction loss (only for present events)
+        timing_loss = self._compute_timing_loss(
+            timing_logits, event_timings, event_labels
+        )
+        
+        # 3. Template alignment loss
+        template_loss = self._compute_template_loss(
+            template_scores, event_timings, event_labels
+        )
+        
+        # Total loss
+        total_loss = (
+            self.event_weight * event_loss +
+            self.timing_weight * timing_loss +
+            self.template_weight * template_loss
+        )
+        
+        return {
+            "total": total_loss,
+            "event": event_loss,
+            "timing": timing_loss,
+            "template": template_loss,
+        }
+    
+    def _compute_timing_loss(
+        self,
+        timing_logits: torch.Tensor,
+        event_timings: torch.Tensor,
+        event_labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute timing prediction loss using negative log-likelihood.
+        
+        Only computed for events that are actually present.
+        """
+        batch_size, seq_len, num_events = timing_logits.shape
+        
+        # Convert to probabilities
+        timing_probs = F.softmax(timing_logits, dim=1)  # (batch, seq_len, num_events)
+        
+        # Create target indices from event_timings
+        # Clamp to valid range
+        target_indices = torch.clamp(
+            event_timings.long(),
+            min=0,
+            max=seq_len - 1
+        )  # (batch, num_events)
+        
+        # Gather probabilities at target indices
+        # Expand indices to gather
+        target_indices_expanded = target_indices.unsqueeze(1)  # (batch, 1, num_events)
+        target_probs = torch.gather(
+            timing_probs,
+            dim=1,
+            index=target_indices_expanded
+        ).squeeze(1)  # (batch, num_events)
+        
+        # Compute NLL only for present events
+        nll = -torch.log(target_probs + 1e-8)
+        masked_nll = nll * event_labels
+        
+        # Average over present events
+        timing_loss = masked_nll.sum() / (event_labels.sum() + 1e-8)
+        
+        return timing_loss
+    
+    def _compute_template_loss(
+        self,
+        template_scores: torch.Tensor,
+        event_timings: torch.Tensor,
+        event_labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute template alignment loss.
+        
+        Encourages template scores to peak at ground truth event timings.
+        Uses Gaussian targets centered at true timing with sigma=10 samples.
+        """
+        batch_size, seq_len, num_events = template_scores.shape
+        
+        # Create timesteps
+        timesteps = torch.arange(seq_len, device=template_scores.device).float()
+        timesteps = timesteps.view(1, -1, 1)  # (1, seq_len, 1)
+        
+        # Expand event_timings
+        event_timings_expanded = event_timings.unsqueeze(1)  # (batch, 1, num_events)
+        
+        # Create Gaussian targets with sigma=10 samples
+        sigma = 10.0
+        gaussian_targets = torch.exp(
+            -((timesteps - event_timings_expanded) ** 2) / (2 * sigma ** 2)
+        )  # (batch, seq_len, num_events)
+        
+        # Apply event mask
+        event_mask = event_labels.unsqueeze(1)  # (batch, 1, num_events)
+        
+        # MSE between template scores and Gaussian targets (only for present events)
+        mse = (template_scores - gaussian_targets) ** 2
+        masked_mse = mse * event_mask
+        
+        # Average over present events
+        template_loss = masked_mse.sum() / (event_mask.sum() * seq_len + 1e-8)
+        
+        return template_loss

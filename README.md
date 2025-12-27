@@ -187,7 +187,206 @@ print("Event timings (samples):", results["event_timings"])
 print("Event probabilities:", results["event_probs"])
 ```
 
+## Event-Specific Architecture
+
+### Overview
+
+The event-specific architecture incorporates domain knowledge about events having distinct feature shapes and cross-feature onset skews. This specialized approach improves event detection and timing prediction by learning event-type-specific patterns.
+
+### Key Components
+
+#### 1. EventTemplateBank
+
+Learns one template per event type with feature-specific onset delays:
+
+```python
+from lstm_classifier.models import EventTemplateBank
+
+template_bank = EventTemplateBank(
+    num_events=16,
+    num_features=6,
+    template_length=80,  # 40ms @ 2000Hz
+)
+
+# Compute template match scores
+template_scores = template_bank(x)  # (batch, seq_len, num_events)
+```
+
+Features:
+- **Learnable templates**: Shape `(num_events, num_features, template_length)` captures full event duration (~40ms)
+- **Feature-specific onset delays**: Shape `(num_events, num_features)` models cross-feature skews (±5ms)
+- **Template matching**: Cross-correlation using `F.conv1d` for efficient matching
+
+#### 2. EventSpecificCNN
+
+Per-event convolutional pathways for learning event-specific temporal patterns:
+
+```python
+from lstm_classifier.models import EventSpecificCNN
+
+event_cnn = EventSpecificCNN(
+    num_events=16,
+    input_channels=6,
+    output_channels=32,
+    use_shared=True,
+)
+
+# Extract event-specific features
+event_features, shared_features = event_cnn(x)
+# event_features: (batch, seq_len, num_events, 32)
+# shared_features: (batch, seq_len, 32)
+```
+
+Each event has 3 conv layers at different temporal scales:
+- **Layer 1**: kernel=11 (5ms) for onset detection
+- **Layer 2**: kernel=21 (10ms) for shape detection  
+- **Layer 3**: kernel=41 (20ms) for full event pattern
+
+#### 3. EventSpecificTimingHeads
+
+Per-event timing predictors with temporal attention:
+
+```python
+from lstm_classifier.models import EventSpecificTimingHeads
+
+timing_heads = EventSpecificTimingHeads(
+    num_events=16,
+    hidden_size=128,
+    dropout=0.2,
+)
+
+# Predict timing for each event
+timing_logits = timing_heads(lstm_features, event_mask)
+```
+
+Features:
+- **Per-event MLPs**: 2-layer networks for timing prediction
+- **Temporal attention**: 4-head attention per event type
+- **Event masking**: Focus on present events only
+
+#### 4. EventSpecificClassifier (Integrated Model)
+
+Complete end-to-end model combining all components:
+
+```python
+from lstm_classifier.models import EventSpecificClassifier
+from lstm_classifier.training import EventSpecificLoss
+from lstm_classifier.utils import visualize_learned_templates
+
+# Create model
+model = EventSpecificClassifier(
+    input_size=6,
+    hidden_size=128,
+    num_layers=2,
+    num_events=16,
+    dropout=0.3,
+    template_length=80,
+    bidirectional=True,
+)
+
+# Forward pass
+event_logits, timing_logits, template_scores = model(x, lengths)
+
+# Training with event-specific loss
+criterion = EventSpecificLoss(
+    event_weight=1.0,
+    timing_weight=1.0,
+    template_weight=0.5,
+    refractory_weight=0.1,
+)
+
+loss_dict = criterion(
+    event_logits, timing_logits, template_scores,
+    event_labels, event_timings
+)
+
+# Visualize learned templates
+visualize_learned_templates(model, 'templates.png')
+```
+
+**Architecture Flow**:
+1. Template matching → match scores for each event
+2. Event-specific CNN → event-specific and shared features
+3. Concatenate features (input + templates + CNN)
+4. Bidirectional LSTM → temporal encoding
+5. Event classification head → which events are present
+6. Event-specific timing heads → when each event occurs
+
+### Loss Function
+
+The `EventSpecificLoss` combines multiple objectives:
+
+```python
+from lstm_classifier.training import EventSpecificLoss
+
+loss_fn = EventSpecificLoss(
+    event_weight=1.0,      # Event classification (BCE)
+    timing_weight=1.0,     # Timing prediction (NLL)
+    template_weight=0.5,   # Template alignment (MSE with Gaussian targets)
+    refractory_weight=0.1, # Refractory period constraint
+)
+```
+
+**Loss Components**:
+1. **Event classification**: Binary cross-entropy for event presence
+2. **Timing prediction**: Negative log-likelihood at true timing (masked by event presence)
+3. **Template alignment**: MSE between template scores and Gaussian targets (σ=10 samples) centered at true timing
+4. **Refractory period**: Optional constraint (can reuse from base model)
+
+### Template Visualization
+
+Visualize learned event templates with feature-specific delays:
+
+```python
+from lstm_classifier.utils import visualize_learned_templates
+
+# After training
+visualize_learned_templates(model, save_path='templates.png')
+```
+
+Creates a 4×4 grid showing:
+- All 16 event types
+- 6 features per event (F0-F5)
+- Feature-specific delays applied
+- Temporal patterns learned
+
+### Training Example
+
+Complete training script available in `examples/train_event_specific.py`:
+
+```bash
+python examples/train_event_specific.py
+```
+
+Key features:
+- Generates synthetic data with event-specific patterns
+- Trains EventSpecificClassifier for 100 epochs
+- Saves template visualizations every 10 epochs
+- Checkpoints best validation model
+
+### Use Cases
+
+The event-specific architecture is ideal when:
+- Different event types have distinct temporal signatures
+- Features show onset skews (delayed activation across channels)
+- Events have characteristic decay patterns
+- You need interpretable learned patterns (via template visualization)
+
+### Performance Characteristics
+
+**Advantages**:
+- Better timing precision for events with clear templates
+- Learns interpretable event-specific patterns
+- Handles feature-specific onset delays naturally
+- Improved robustness to event-specific noise
+
+**Trade-offs**:
+- Larger model (16× more parameters in event-specific pathways)
+- Requires more data to train per-event components
+- Template matching adds computational cost
+
 ## Architecture
+
 
 ### Model Components
 

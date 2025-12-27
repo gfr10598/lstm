@@ -7,6 +7,7 @@ from .postprocessing import (
     detect_events_from_sequence,
     batch_inference,
 )
+from .visualization import visualize_learned_templates
 
 __all__ = [
     "RefractoryPeriodEnforcer",
@@ -14,4 +15,5 @@ __all__ = [
     "smooth_predictions",
     "detect_events_from_sequence",
     "batch_inference",
+    "visualize_learned_templates",
 ]
