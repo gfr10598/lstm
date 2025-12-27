@@ -4,6 +4,7 @@ from .losses import (
     EventTimingLoss,
     AutoencoderLoss,
     VariationalAutoencoderLoss,
+    EventSpecificLoss,
 )
 from .trainers import (
     SupervisedTrainer,
@@ -15,6 +16,7 @@ __all__ = [
     "EventTimingLoss",
     "AutoencoderLoss",
     "VariationalAutoencoderLoss",
+    "EventSpecificLoss",
     "SupervisedTrainer",
     "UnsupervisedTrainer",
     "ContrastiveTrainer",
