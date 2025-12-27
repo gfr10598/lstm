@@ -7,6 +7,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from typing import Optional
 
+# Import constant from model module
+from lstm_classifier.models.event_specific import MAX_ONSET_DELAY_SAMPLES
+
 
 def visualize_learned_templates(model, save_path: str = 'templates.png'):
     """
@@ -42,8 +45,8 @@ def visualize_learned_templates(model, save_path: str = 'templates.png'):
             template = templates[event_idx, feature_idx].numpy()
             delay = delays[event_idx, feature_idx].item()
             
-            # Clamp delay to ±10 samples
-            delay_clamped = np.clip(delay, -10, 10)
+            # Clamp delay using constant from model
+            delay_clamped = np.clip(delay, -MAX_ONSET_DELAY_SAMPLES, MAX_ONSET_DELAY_SAMPLES)
             delay_int = int(np.round(delay_clamped))
             
             # Apply delay using roll

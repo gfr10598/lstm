@@ -11,6 +11,10 @@ import torch.nn.functional as F
 from typing import Tuple, Optional, Dict
 
 
+# Constants
+MAX_ONSET_DELAY_SAMPLES = 10  # Maximum onset delay in samples (±5ms @ 2000Hz)
+
+
 class EventTemplateBank(nn.Module):
     """
     Learnable template bank for event-specific pattern matching.
@@ -18,6 +22,12 @@ class EventTemplateBank(nn.Module):
     Each event type has:
     - A learnable template capturing the event's feature patterns
     - Feature-specific onset delays representing cross-feature skews
+    
+    Note: The onset delays use discrete operations (torch.roll) for applying
+    temporal shifts, which means gradients do not flow through the delay
+    parameters. This is a design trade-off for computational efficiency.
+    For applications requiring differentiable delays, consider using
+    spatial transformer networks or sinc interpolation.
     
     Args:
         num_events: Number of event types (default: 16)
@@ -56,6 +66,9 @@ class EventTemplateBank(nn.Module):
         """
         Apply feature-specific delays to templates.
         
+        Note: This uses discrete operations (torch.roll) which are not differentiable.
+        Gradients will not flow through the delay parameters.
+        
         Args:
             templates: Templates of shape (num_events, num_features, template_length)
             delays: Delays of shape (num_events, num_features)
@@ -63,8 +76,8 @@ class EventTemplateBank(nn.Module):
         Returns:
             Delayed templates of shape (num_events, num_features, template_length)
         """
-        # Clamp delays to ±10 samples (±5ms)
-        clamped_delays = torch.clamp(delays, -10, 10)
+        # Clamp delays to ±MAX_ONSET_DELAY_SAMPLES
+        clamped_delays = torch.clamp(delays, -MAX_ONSET_DELAY_SAMPLES, MAX_ONSET_DELAY_SAMPLES)
         
         batch_size = templates.shape[0]
         delayed_templates = []

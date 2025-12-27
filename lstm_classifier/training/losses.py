@@ -394,7 +394,8 @@ class EventSpecificLoss(nn.Module):
         ).squeeze(1)  # (batch, num_events)
         
         # Compute NLL only for present events
-        nll = -torch.log(target_probs + 1e-8)
+        # Use clamp for numerical stability
+        nll = -torch.log(torch.clamp(target_probs, min=1e-8))
         masked_nll = nll * event_labels
         
         # Average over present events
@@ -436,7 +437,8 @@ class EventSpecificLoss(nn.Module):
         mse = (template_scores - gaussian_targets) ** 2
         masked_mse = mse * event_mask
         
-        # Average over present events
-        template_loss = masked_mse.sum() / (event_mask.sum() * seq_len + 1e-8)
+        # Average over present events and sequence length
+        # event_mask.sum() gives total number of (batch, event) pairs that are present
+        template_loss = masked_mse.sum() / ((event_mask.sum() + 1e-8) * seq_len)
         
         return template_loss
